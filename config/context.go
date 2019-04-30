@@ -29,6 +29,7 @@ import (
 	"k8s.io/api/core/v1"
 	"k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/apimachinery/pkg/runtime"
+	k8dynamic "k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
@@ -149,6 +150,7 @@ type ManagementContext struct {
 	LocalConfig       *rest.Config
 	RESTConfig        rest.Config
 	UnversionedClient rest.Interface
+	DynamicClient     k8dynamic.Interface
 	K8sClient         kubernetes.Interface
 	APIExtClient      clientset.Interface
 	Events            record.EventRecorder
@@ -268,6 +270,11 @@ func NewManagementContext(config rest.Config) (*ManagementContext, error) {
 	}
 
 	context.K8sClient, err = kubernetes.NewForConfig(&config)
+	if err != nil {
+		return nil, err
+	}
+
+	context.DynamicClient, err = k8dynamic.NewForConfig(&config)
 	if err != nil {
 		return nil, err
 	}
