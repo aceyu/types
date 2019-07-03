@@ -6,7 +6,7 @@ import (
 	"github.com/rancher/norman/controller"
 	"github.com/rancher/norman/objectclient"
 	"github.com/rancher/norman/resource"
-	"k8s.io/api/rbac/v1"
+	v1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -151,6 +151,7 @@ func (c *roleBindingController) AddHandler(ctx context.Context, name string, han
 }
 
 func (c *roleBindingController) AddClusterScopedHandler(ctx context.Context, name, cluster string, handler RoleBindingHandlerFunc) {
+	resource.PutClusterScoped(RoleBindingGroupVersionResource)
 	c.GenericController.AddHandler(ctx, name, func(key string, obj interface{}) (interface{}, error) {
 		if obj == nil {
 			return handler(key, nil)

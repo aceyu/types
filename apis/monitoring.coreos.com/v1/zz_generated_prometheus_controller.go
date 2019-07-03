@@ -3,7 +3,7 @@ package v1
 import (
 	"context"
 
-	"github.com/coreos/prometheus-operator/pkg/client/monitoring/v1"
+	v1 "github.com/coreos/prometheus-operator/pkg/client/monitoring/v1"
 	"github.com/rancher/norman/controller"
 	"github.com/rancher/norman/objectclient"
 	"github.com/rancher/norman/resource"
@@ -151,6 +151,7 @@ func (c *prometheusController) AddHandler(ctx context.Context, name string, hand
 }
 
 func (c *prometheusController) AddClusterScopedHandler(ctx context.Context, name, cluster string, handler PrometheusHandlerFunc) {
+	resource.PutClusterScoped(PrometheusGroupVersionResource)
 	c.GenericController.AddHandler(ctx, name, func(key string, obj interface{}) (interface{}, error) {
 		if obj == nil {
 			return handler(key, nil)

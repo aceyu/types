@@ -1,10 +1,14 @@
 package schema
 
 import (
+	"reflect"
+	"strings"
+
 	"github.com/rancher/norman/types"
 	m "github.com/rancher/norman/types/mapper"
+	v3 "github.com/rancher/types/apis/cluster.cattle.io/v3"
 	"github.com/rancher/types/factory"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 )
 
@@ -20,7 +24,8 @@ var (
 	Schemas = factory.Schemas(&Version).
 		Init(namespaceTypes).
 		Init(persistentVolumeTypes).
-		Init(storageClassTypes)
+		Init(storageClassTypes).
+		Init(tokens)
 )
 
 func namespaceTypes(schemas *types.Schemas) *types.Schemas {
@@ -32,13 +37,16 @@ func namespaceTypes(schemas *types.Schemas) *types.Schemas {
 			&m.AnnotationField{Field: "description"},
 			&m.AnnotationField{Field: "projectId"},
 			&m.AnnotationField{Field: "resourceQuota", Object: true},
+			&m.AnnotationField{Field: "containerDefaultResourceLimit", Object: true},
 			&m.Drop{Field: "status"},
 		).
 		MustImport(&Version, NamespaceResourceQuota{}).
+		MustImport(&Version, ContainerResourceLimit{}).
 		MustImport(&Version, v1.Namespace{}, struct {
-			Description   string `json:"description"`
-			ProjectID     string `norman:"type=reference[/v3/schemas/project],noupdate"`
-			ResourceQuota string `json:"resourceQuota,omitempty" norman:"type=namespaceResourceQuota"`
+			Description                   string `json:"description"`
+			ProjectID                     string `norman:"type=reference[/v3/schemas/project],noupdate"`
+			ResourceQuota                 string `json:"resourceQuota,omitempty" norman:"type=namespaceResourceQuota"`
+			ContainerDefaultResourceLimit string `json:"containerDefaultResourceLimit,omitempty" norman:"type=containerResourceLimit"`
 		}{}).
 		MustImport(&Version, NamespaceMove{}).
 		MustImportAndCustomize(&Version, v1.Namespace{}, func(schema *types.Schema) {
@@ -73,7 +81,31 @@ func persistentVolumeTypes(schemas *types.Schemas) *types.Schemas {
 		}{}).
 		MustImport(&Version, v1.PersistentVolume{}, struct {
 			Description string `json:"description"`
-		}{})
+		}{}).
+		MustImportAndCustomize(&Version, v1.PersistentVolume{}, func(schema *types.Schema) {
+			schema.MustCustomizeField("volumeMode", func(field types.Field) types.Field {
+				field.Update = false
+				return field
+			})
+			// All fields of PersistentVolumeSource are immutable
+			val := reflect.ValueOf(v1.PersistentVolumeSource{})
+			for i := 0; i < val.Type().NumField(); i++ {
+				if tag, ok := val.Type().Field(i).Tag.Lookup("json"); ok {
+					name := strings.Split(tag, ",")[0]
+					schema.MustCustomizeField(name, func(field types.Field) types.Field {
+						field.Update = false
+						return field
+					})
+					pvSchema := schemas.Schema(&Version, val.Type().Field(i).Type.String()[4:])
+					for name := range pvSchema.ResourceFields {
+						pvSchema.MustCustomizeField(name, func(field types.Field) types.Field {
+							field.Update = false
+							return field
+						})
+					}
+				}
+			}
+		})
 }
 
 func storageClassTypes(schemas *types.Schemas) *types.Schemas {
@@ -85,4 +117,16 @@ func storageClassTypes(schemas *types.Schemas) *types.Schemas {
 			Description   string `json:"description"`
 			ReclaimPolicy string `json:"reclaimPolicy,omitempty" norman:"type=enum,options=Recycle|Delete|Retain"`
 		}{})
+}
+
+func tokens(schemas *types.Schemas) *types.Schemas {
+	return schemas.
+		MustImportAndCustomize(&Version, v3.ClusterAuthToken{}, func(schema *types.Schema) {
+			schema.CollectionMethods = []string{}
+			schema.ResourceMethods = []string{}
+		}).
+		MustImportAndCustomize(&Version, v3.ClusterUserAttribute{}, func(schema *types.Schema) {
+			schema.CollectionMethods = []string{}
+			schema.ResourceMethods = []string{}
+		})
 }

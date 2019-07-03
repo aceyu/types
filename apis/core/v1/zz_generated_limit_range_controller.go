@@ -6,7 +6,7 @@ import (
 	"github.com/rancher/norman/controller"
 	"github.com/rancher/norman/objectclient"
 	"github.com/rancher/norman/resource"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -151,6 +151,7 @@ func (c *limitRangeController) AddHandler(ctx context.Context, name string, hand
 }
 
 func (c *limitRangeController) AddClusterScopedHandler(ctx context.Context, name, cluster string, handler LimitRangeHandlerFunc) {
+	resource.PutClusterScoped(LimitRangeGroupVersionResource)
 	c.GenericController.AddHandler(ctx, name, func(key string, obj interface{}) (interface{}, error) {
 		if obj == nil {
 			return handler(key, nil)
