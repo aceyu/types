@@ -11,12 +11,24 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+type (
+	contextKeyType        struct{}
+	contextClientsKeyType struct{}
+)
+
 type Interface interface {
 	RESTClient() rest.Interface
 	controller.Starter
 
 	PodSecurityPoliciesGetter
 	IngressesGetter
+}
+
+type Clients struct {
+	Interface Interface
+
+	PodSecurityPolicy PodSecurityPolicyClient
+	Ingress           IngressClient
 }
 
 type Client struct {
@@ -26,6 +38,48 @@ type Client struct {
 
 	podSecurityPolicyControllers map[string]PodSecurityPolicyController
 	ingressControllers           map[string]IngressController
+}
+
+func Factory(ctx context.Context, config rest.Config) (context.Context, controller.Starter, error) {
+	c, err := NewForConfig(config)
+	if err != nil {
+		return ctx, nil, err
+	}
+
+	cs := NewClientsFromInterface(c)
+
+	ctx = context.WithValue(ctx, contextKeyType{}, c)
+	ctx = context.WithValue(ctx, contextClientsKeyType{}, cs)
+	return ctx, c, nil
+}
+
+func ClientsFrom(ctx context.Context) *Clients {
+	return ctx.Value(contextClientsKeyType{}).(*Clients)
+}
+
+func From(ctx context.Context) Interface {
+	return ctx.Value(contextKeyType{}).(Interface)
+}
+
+func NewClients(config rest.Config) (*Clients, error) {
+	iface, err := NewForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	return NewClientsFromInterface(iface), nil
+}
+
+func NewClientsFromInterface(iface Interface) *Clients {
+	return &Clients{
+		Interface: iface,
+
+		PodSecurityPolicy: &podSecurityPolicyClient2{
+			iface: iface.PodSecurityPolicies(""),
+		},
+		Ingress: &ingressClient2{
+			iface: iface.Ingresses(""),
+		},
+	}
 }
 
 func NewForConfig(config rest.Config) (Interface, error) {

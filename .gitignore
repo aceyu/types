@@ -7,4 +7,5 @@
 /trash.lock
 /types
 *trash.lock
+.vscode/
 .DS_Store
