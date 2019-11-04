@@ -9,6 +9,7 @@ import (
 	"github.com/rancher/types/factory"
 	"github.com/rancher/types/mapper"
 	v1 "k8s.io/api/core/v1"
+	apiserverconfig "k8s.io/apiserver/pkg/apis/config"
 )
 
 var (
@@ -40,16 +41,33 @@ var (
 		Init(globalDNSTypes).
 		Init(kontainerTypes).
 		Init(etcdBackupTypes).
+		Init(clusterScanTypes).
 		Init(monitorTypes).
 		Init(credTypes).
-		Init(mgmtSecretTypes)
+		Init(mgmtSecretTypes).
+		Init(clusterTemplateTypes).
+		Init(driverMetadataTypes).
+		Init(encryptionTypes)
 
 	TokenSchemas = factory.Schemas(&Version).
 			Init(tokens)
 )
 
 func rkeTypes(schemas *types.Schemas) *types.Schemas {
-	return schemas.AddMapperForType(&Version, v3.BaseService{}, m.Drop{Field: "image"})
+	return schemas.AddMapperForType(&Version, v3.BaseService{}, m.Drop{Field: "image"}).
+		AddMapperForType(&Version, v1.Taint{},
+			m.Enum{Field: "effect", Options: []string{
+				string(v1.TaintEffectNoSchedule),
+				string(v1.TaintEffectPreferNoSchedule),
+				string(v1.TaintEffectNoExecute),
+			}},
+			m.Required{Fields: []string{
+				"effect",
+				"value",
+				"key",
+			}},
+			m.ReadOnly{Field: "timeAdded"},
+		)
 }
 
 func schemaTypes(schemas *types.Schemas) *types.Schemas {
@@ -60,7 +78,9 @@ func schemaTypes(schemas *types.Schemas) *types.Schemas {
 func credTypes(schemas *types.Schemas) *types.Schemas {
 	return schemas.
 		AddMapperForType(&Version, v3.CloudCredential{},
+			&m.DisplayName{},
 			&mapper.CredentialMapper{},
+			&m.AnnotationField{Field: "name"},
 			&m.Drop{Field: "namespaceId"}).
 		MustImport(&Version, v3.CloudCredential{})
 }
@@ -74,6 +94,16 @@ func mgmtSecretTypes(schemas *types.Schemas) *types.Schemas {
 	})
 }
 
+func driverMetadataTypes(schemas *types.Schemas) *types.Schemas {
+	return schemas.
+		AddMapperForType(&Version, v3.RKEK8sSystemImage{}, m.Drop{Field: "namespaceId"}).
+		AddMapperForType(&Version, v3.RKEK8sServiceOption{}, m.Drop{Field: "namespaceId"}).
+		AddMapperForType(&Version, v3.RKEAddon{}, m.Drop{Field: "namespaceId"}).
+		MustImport(&Version, v3.RKEK8sSystemImage{}).
+		MustImport(&Version, v3.RKEK8sServiceOption{}).
+		MustImport(&Version, v3.RKEAddon{})
+}
+
 func catalogTypes(schemas *types.Schemas) *types.Schemas {
 	return schemas.
 		AddMapperForType(&Version, v3.Catalog{},
@@ -81,12 +111,13 @@ func catalogTypes(schemas *types.Schemas) *types.Schemas {
 			&m.Embed{Field: "status"},
 			&m.Drop{Field: "helmVersionCommits"},
 		).
+		MustImport(&Version, v3.CatalogRefresh{}).
 		MustImportAndCustomize(&Version, v3.Catalog{}, func(schema *types.Schema) {
 			schema.ResourceActions = map[string]types.Action{
-				"refresh": {},
+				"refresh": {Output: "catalogRefresh"},
 			}
 			schema.CollectionActions = map[string]types.Action{
-				"refresh": {},
+				"refresh": {Output: "catalogRefresh"},
 			}
 		}).
 		AddMapperForType(&Version, v3.Template{},
@@ -130,8 +161,10 @@ func nativeNodeTypes(schemas *types.Schemas) *types.Schemas {
 			&m.Drop{Field: "configSource"},
 			&m.Move{From: "providerID", To: "providerId"},
 			&m.Move{From: "podCIDR", To: "podCidr"},
+			&m.Move{From: "podCIDRs", To: "podCidrs"},
 			m.Access{Fields: map[string]string{
 				"podCidr":       "r",
+				"podCidrs":      "r",
 				"providerId":    "r",
 				"taints":        "ru",
 				"unschedulable": "ru",
@@ -183,6 +216,7 @@ func clusterTypes(schemas *types.Schemas) *types.Schemas {
 		MustImport(&Version, v3.MonitoringInput{}).
 		MustImport(&Version, v3.MonitoringOutput{}).
 		MustImport(&Version, v3.RestoreFromEtcdBackupInput{}).
+		MustImport(&Version, v3.SaveAsTemplateInput{}).
 		MustImportAndCustomize(&Version, v3.ETCDService{}, func(schema *types.Schema) {
 			schema.MustCustomizeField("extraArgs", func(field types.Field) types.Field {
 				field.Default = map[string]interface{}{
@@ -198,33 +232,37 @@ func clusterTypes(schemas *types.Schemas) *types.Schemas {
 				field.Required = false
 				return field
 			})
-			schema.ResourceActions["generateKubeconfig"] = types.Action{
+			schema.ResourceActions[v3.ClusterActionGenerateKubeconfig] = types.Action{
 				Output: "generateKubeConfigOutput",
 			}
-			schema.ResourceActions["importYaml"] = types.Action{
+			schema.ResourceActions[v3.ClusterActionImportYaml] = types.Action{
 				Input:  "importClusterYamlInput",
 				Output: "importYamlOutput",
 			}
-			schema.ResourceActions["exportYaml"] = types.Action{
+			schema.ResourceActions[v3.ClusterActionExportYaml] = types.Action{
 				Output: "exportOutput",
 			}
-			schema.ResourceActions["enableMonitoring"] = types.Action{
+			schema.ResourceActions[v3.ClusterActionEnableMonitoring] = types.Action{
 				Input: "monitoringInput",
 			}
-			schema.ResourceActions["disableMonitoring"] = types.Action{}
-			schema.ResourceActions["viewMonitoring"] = types.Action{
+			schema.ResourceActions[v3.ClusterActionDisableMonitoring] = types.Action{}
+			schema.ResourceActions[v3.ClusterActionViewMonitoring] = types.Action{
 				Output: "monitoringOutput",
 			}
-			schema.ResourceActions["editMonitoring"] = types.Action{
+			schema.ResourceActions[v3.ClusterActionEditMonitoring] = types.Action{
 				Input: "monitoringInput",
 			}
-			schema.ResourceActions["backupEtcd"] = types.Action{}
-			schema.ResourceActions["restoreFromEtcdBackup"] = types.Action{
+			schema.ResourceActions[v3.ClusterActionBackupEtcd] = types.Action{}
+			schema.ResourceActions[v3.ClusterActionRestoreFromEtcdBackup] = types.Action{
 				Input: "restoreFromEtcdBackupInput",
 			}
-			schema.ResourceActions["rotateCertificates"] = types.Action{
+			schema.ResourceActions[v3.ClusterActionRotateCertificates] = types.Action{
 				Input:  "rotateCertificateInput",
 				Output: "rotateCertificateOutput",
+			}
+			schema.ResourceActions[v3.ClusterActionRunCISScan] = types.Action{}
+			schema.ResourceActions[v3.ClusterActionSaveAsTemplate] = types.Action{
+				Input: "saveAsTemplateInput",
 			}
 		})
 }
@@ -300,10 +338,9 @@ func nodeTypes(schemas *types.Schemas) *types.Schemas {
 			&m.Drop{Field: "annotations"},
 			&m.Move{From: "nodeLabels", To: "labels"},
 			&m.Move{From: "nodeAnnotations", To: "annotations"},
-			&m.Drop{Field: "desiredNodeLabels"},
-			&m.Drop{Field: "desiredNodeAnnotations"},
-			&m.Drop{Field: "currentNodeLabels"},
-			&m.Drop{Field: "currentNodeAnnotations"},
+			&m.Drop{Field: "desiredNodeTaints"},
+			&m.Drop{Field: "metadataUpdate"},
+			&m.Drop{Field: "updateTaintsFromAPI"},
 			&m.Drop{Field: "desiredNodeUnschedulable"},
 			&m.Drop{Field: "nodeDrainInput"},
 			&m.AnnotationField{Field: "publicEndpoints", List: true},
@@ -312,13 +349,24 @@ func nodeTypes(schemas *types.Schemas) *types.Schemas {
 		AddMapperForType(&Version, v3.NodeDriver{}, m.DisplayName{}).
 		AddMapperForType(&Version, v3.NodeTemplate{}, m.DisplayName{}).
 		MustImport(&Version, v3.PublicEndpoint{}).
-		MustImport(&Version, v3.NodePool{}).
+		MustImportAndCustomize(&Version, v3.NodePool{}, func(schema *types.Schema) {
+			schema.ResourceFields["driver"] = types.Field{
+				Type:     "string",
+				CodeName: "Driver",
+				Create:   false,
+				Update:   false,
+			}
+		}).
 		MustImport(&Version, v3.NodeDrainInput{}).
 		MustImportAndCustomize(&Version, v3.Node{}, func(schema *types.Schema) {
 			labelField := schema.ResourceFields["labels"]
 			labelField.Create = true
 			labelField.Update = true
 			schema.ResourceFields["labels"] = labelField
+			annotationField := schema.ResourceFields["annotations"]
+			annotationField.Create = true
+			annotationField.Update = true
+			schema.ResourceFields["annotations"] = annotationField
 			unschedulable := schema.ResourceFields["unschedulable"]
 			unschedulable.Create = false
 			unschedulable.Update = false
@@ -506,7 +554,25 @@ func authnTypes(schemas *types.Schemas) *types.Schemas {
 		MustImportAndCustomize(&Version, v3.KeyCloakConfig{}, configSchema).
 		MustImportAndCustomize(&Version, v3.OKTAConfig{}, configSchema).
 		MustImport(&Version, v3.SamlConfigTestInput{}).
-		MustImport(&Version, v3.SamlConfigTestOutput{})
+		MustImport(&Version, v3.SamlConfigTestOutput{}).
+		//GoogleOAuth Config
+		MustImportAndCustomize(&Version, v3.GoogleOauthConfig{}, func(schema *types.Schema) {
+			schema.BaseType = "authConfig"
+			schema.ResourceActions = map[string]types.Action{
+				"disable": {},
+				"configureTest": {
+					Input:  "googleOauthConfig",
+					Output: "googleOauthConfigTestOutput",
+				},
+				"testAndApply": {
+					Input: "googleOauthConfigApplyInput",
+				},
+			}
+			schema.CollectionMethods = []string{}
+			schema.ResourceMethods = []string{http.MethodGet, http.MethodPut}
+		}).
+		MustImport(&Version, v3.GoogleOauthConfigApplyInput{}).
+		MustImport(&Version, v3.GoogleOauthConfigTestOutput{})
 }
 
 func configSchema(schema *types.Schema) {
@@ -592,6 +658,12 @@ func globalTypes(schema *types.Schemas) *types.Schemas {
 				f.Required = true
 				return f
 			})
+		}).
+		MustImportAndCustomize(&Version, v3.Feature{}, func(schema *types.Schema) {
+			schema.MustCustomizeField("name", func(f types.Field) types.Field {
+				f.Required = true
+				return f
+			})
 		})
 }
 
@@ -661,10 +733,10 @@ func projectCatalogTypes(schemas *types.Schemas) *types.Schemas {
 			&mapper.NamespaceIDMapper{}).
 		MustImportAndCustomize(&Version, v3.ProjectCatalog{}, func(schema *types.Schema) {
 			schema.ResourceActions = map[string]types.Action{
-				"refresh": {},
+				"refresh": {Output: "catalogRefresh"},
 			}
 			schema.CollectionActions = map[string]types.Action{
-				"refresh": {},
+				"refresh": {Output: "catalogRefresh"},
 			}
 		})
 }
@@ -678,10 +750,10 @@ func clusterCatalogTypes(schemas *types.Schemas) *types.Schemas {
 			&mapper.NamespaceIDMapper{}).
 		MustImportAndCustomize(&Version, v3.ClusterCatalog{}, func(schema *types.Schema) {
 			schema.ResourceActions = map[string]types.Action{
-				"refresh": {},
+				"refresh": {Output: "catalogRefresh"},
 			}
 			schema.CollectionActions = map[string]types.Action{
-				"refresh": {},
+				"refresh": {Output: "catalogRefresh"},
 			}
 		})
 }
@@ -747,6 +819,9 @@ func kontainerTypes(schemas *types.Schemas) *types.Schemas {
 				"activate":   {},
 				"deactivate": {},
 			}
+			schema.CollectionActions = map[string]types.Action{
+				"refresh": {},
+			}
 		})
 }
 
@@ -798,9 +873,46 @@ func monitorTypes(schemas *types.Schemas) *types.Schemas {
 				},
 			}
 		})
-
 }
 
 func etcdBackupTypes(schemas *types.Schemas) *types.Schemas {
 	return schemas.MustImport(&Version, v3.EtcdBackup{})
+}
+
+func clusterTemplateTypes(schemas *types.Schemas) *types.Schemas {
+	return schemas.
+		TypeName("clusterTemplate", v3.ClusterTemplate{}).
+		TypeName("clusterTemplateRevision", v3.ClusterTemplateRevision{}).
+		AddMapperForType(&Version, v3.ClusterTemplate{}, m.Drop{Field: "namespaceId"}, m.DisplayName{}).
+		AddMapperForType(&Version, v3.ClusterTemplateRevision{}, m.Drop{Field: "namespaceId"}, m.DisplayName{}).
+		MustImport(&Version, v3.ClusterTemplateQuestionsOutput{}).
+		MustImport(&Version, v3.ClusterTemplate{}).
+		MustImportAndCustomize(&Version, v3.ClusterTemplateRevision{}, func(schema *types.Schema) {
+			schema.ResourceActions = map[string]types.Action{
+				"disable": {},
+				"enable":  {},
+			}
+			schema.CollectionActions = map[string]types.Action{
+				"listquestions": {
+					Output: "clusterTemplateQuestionsOutput",
+				},
+			}
+		})
+
+}
+
+func clusterScanTypes(schemas *types.Schemas) *types.Schemas {
+	return schemas.MustImportAndCustomize(&Version, v3.ClusterScan{}, func(schema *types.Schema) {
+		schema.CollectionMethods = []string{http.MethodGet}
+		schema.ResourceMethods = []string{http.MethodGet, http.MethodDelete}
+	})
+}
+
+func encryptionTypes(schemas *types.Schemas) *types.Schemas {
+	return schemas.MustImport(&Version, v3.SecretsEncryptionConfig{}).
+		MustImport(&Version, apiserverconfig.Key{}, struct {
+			Secret string `norman:"type=password"`
+		}{}).MustImport(&Version, apiserverconfig.KMSConfiguration{}, struct {
+		Timeout string
+	}{})
 }

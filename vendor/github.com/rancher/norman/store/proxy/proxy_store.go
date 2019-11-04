@@ -20,6 +20,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -302,7 +303,7 @@ func (s *Store) realWatch(apiContext *types.APIContext, schema *types.Schema, op
 
 	framer := json.Framer.NewFrameReader(body)
 	decoder := streaming.NewDecoder(framer, &unstructuredDecoder{})
-	watcher := watch.NewStreamWatcher(restclientwatch.NewDecoder(decoder, &unstructuredDecoder{}))
+	watcher := watch.NewStreamWatcher(restclientwatch.NewDecoder(decoder, &unstructuredDecoder{}), &errorReporter{})
 
 	watchingContext, cancelWatchingContext := context.WithCancel(apiContext.Request.Context())
 	go func() {
@@ -314,12 +315,17 @@ func (s *Store) realWatch(apiContext *types.APIContext, schema *types.Schema, op
 	result := make(chan map[string]interface{})
 	go func() {
 		for event := range watcher.ResultChan() {
-			data := event.Object.(*unstructured.Unstructured)
-			s.fromInternal(apiContext, schema, data.Object)
-			if event.Type == watch.Deleted && data.Object != nil {
-				data.Object[".removed"] = true
+			if data, ok := event.Object.(*metav1.Status); ok {
+				// just logging it, keeping the same behavior as before
+				logrus.Errorf("watcher error %s", data.Message)
+			} else {
+				data := event.Object.(*unstructured.Unstructured)
+				s.fromInternal(apiContext, schema, data.Object)
+				if event.Type == watch.Deleted && data.Object != nil {
+					data.Object[".removed"] = true
+				}
+				result <- data.Object
 			}
-			result <- data.Object
 		}
 		logrus.Debugf("closing watcher for %s", schema.ID)
 		close(result)
@@ -330,6 +336,13 @@ func (s *Store) realWatch(apiContext *types.APIContext, schema *types.Schema, op
 }
 
 type unstructuredDecoder struct {
+}
+
+type errorReporter struct {
+}
+
+func (e *errorReporter) AsObject(err error) runtime.Object {
+	return &metav1.Status{Message: err.Error(), Code: http.StatusInternalServerError, Reason: "ClientWatchDecoding"}
 }
 
 func (d *unstructuredDecoder) Decode(data []byte, defaults *schema.GroupVersionKind, into runtime.Object) (runtime.Object, *schema.GroupVersionKind, error) {
@@ -459,12 +472,12 @@ func (s *Store) Delete(apiContext *types.APIContext, schema *types.Schema, id st
 	}
 
 	namespace, name := splitID(id)
-
-	prop := metav1.DeletePropagationBackground
+	options, err := getDeleteOption(apiContext.Request)
+	if err != nil {
+		return nil, err
+	}
 	req := s.common(namespace, k8sClient.Delete()).
-		Body(&metav1.DeleteOptions{
-			PropagationPolicy: &prop,
-		}).
+		Body(options).
 		Name(name)
 
 	err = s.doAuthed(apiContext, req).Error()
@@ -507,6 +520,18 @@ func splitID(id string) (string, string) {
 	}
 
 	return namespace, id
+}
+
+func getDeleteOption(req *http.Request) (*metav1.DeleteOptions, error) {
+	options := &metav1.DeleteOptions{}
+	if err := metainternalversion.ParameterCodec.DecodeParameters(req.URL.Query(), metainternalversion.SchemeGroupVersion, options); err != nil {
+		return nil, err
+	}
+	prop := metav1.DeletePropagationBackground
+	if options.PropagationPolicy == nil {
+		options.PropagationPolicy = &prop
+	}
+	return options, nil
 }
 
 func (s *Store) common(namespace string, req *rest.Request) *rest.Request {
